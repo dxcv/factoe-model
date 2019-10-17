@@ -32,13 +32,27 @@ def norm_df(hs300_trade_data,hs300_wgt_data, raw_factor):
     return hs300_trade_data,hs300_wgt_data,raw_factor
 
 
-def get_ts_code_original_weight(hs300_wgt_data):
+def get_stock_close_price(trade_data, date=None):
+    if date:
+        trade_data = trade_data[trade_data.trade_date == date]
+    close_price = {}
+    num = len(trade_data)
+    for i in range(num):
+        tmp = trade_data.iloc[i]
+        ts_code = tmp['ts_code']
+        price = tmp['close']
+        close_price[ts_code] = price
+    return close_price
+
+
+def get_ts_code_original_weight(hs300_wgt_data, date=None):
+    if date:
+        hs300_wgt_data = hs300_wgt_data[hs300_wgt_data.trade_date == date]
     original_weight = {}
     num = len(hs300_wgt_data)
-    date = hs300_wgt_data['trade_date'].drop_duplicates().to_list()
-    assert len(date) == 1, print('the hs300_wgt_data has more one days data'.format(date))
-    assert num == 300, print('the num of hs300 is not 300 in date {} '.
-                             format(date))
+    date_list = hs300_wgt_data['trade_date'].drop_duplicates().to_list()
+    assert len(date_list) == 1, print('the hs300_wgt_data has more one days data'.format(date_list))
+    assert num == 300, print('the num of hs300 is not 300 in date {} '.format(date_list))
     for i in range(num):
         tmp = hs300_wgt_data.iloc[i]
         ts_code = tmp['ts_code']
@@ -60,6 +74,45 @@ def get_factor_score(factor_data, factor_name):
     return factor_score
 
 
+def get_position(wgt_opt_df, date=None):
+    if date:
+        wgt_opt_df = wgt_opt_df[wgt_opt_df.Date == date]
+    num = len(wgt_opt_df)
+    position = {}
+    for i in range(num):
+        tmp = wgt_opt_df.iloc[i]
+        position[tmp['ts_code']] = tmp['position']
+    return position
+
+
+def get_adjust_weight(wgt_opt_df, date):
+    df = wgt_opt_df[wgt_opt_df.Date == date]
+    close_price = get_stock_close_price(df)
+    position = get_position(df)
+    adjust_weight = compute_weight_by_position(position, close_price)
+    return adjust_weight
+
+
+def compute_position(close_price, weight):
+    position = {}
+    for key, val in weight.items():
+        position[key] = val * close_price[key]
+    return position
+
+
+def compute_weight_by_position(position, close_price):
+    weight = {}
+    all_position_price = dict_prod(position, close_price)
+    for key, val in position.items():
+        weight[key] = (val * close_price[key])/all_position_price
+    return weight
+
+
+def init_wgt_opt_df(hs300_wgt_data):
+    df = copy.deepcopy(hs300_wgt_data)
+    return df
+
+
 def init_model(hs300_ts_code, original_weight, overall_score):
     model = gurobipy.Model('factor_model')
     weight = {}
@@ -75,29 +128,14 @@ def init_model(hs300_ts_code, original_weight, overall_score):
     return model, weight, weight_binary
 
 
-def init_wgt_opt_df(hs300_wgt_data):
-    df = copy.deepcopy(hs300_wgt_data)
-    return df
-
-
-def get_pre_opt_weight(wgt_opt_df, date):
-    df = wgt_opt_df[wgt_opt_df.Date == date]
-    num = len(df)
-    pre_opt_weight = {}
-    for i in range(num):
-        tmp = df.iloc[i]
-        pre_opt_weight[tmp['ts_code']] = tmp['opt-weight']
-    return pre_opt_weight
-
-
 def add_trade_constr(model, weight, weight_binary,
-                     suspend_stock, pre_opt_weight):
-    if not pre_opt_weight:
+                     suspend_stock, adjust_weight):
+    if not adjust_weight:
         pre_opt_weight = {}
         for stock in suspend_stock:
             pre_opt_weight[stock] = 0
     for stock in suspend_stock:
-        model.addConstr(weight[stock] == pre_opt_weight[stock], name='trade_cons_'+stock)
+        model.addConstr(weight[stock] == adjust_weight[stock], name='trade_cons_'+stock)
         # model.addConstr(weight_binary[stock] == 1, name='trade_cons_' + stock)
 
 
@@ -141,14 +179,8 @@ def main():
     hs300_trade_data = pd.read_csv(hs300_trade_data_path, sep='\t')
     hs300_wgt_data = pd.read_csv(hs300_wgt_path, sep=',')
     wgt_opt_df = init_wgt_opt_df(hs300_wgt_data)
+    hs300_trade_data, hs300_wgt_data, raw_factor = norm_df(hs300_trade_data, hs300_wgt_data, raw_factor)
     pre_date = None
-    hs300_trade_data,hs300_wgt_data,raw_factor = norm_df(hs300_trade_data,hs300_wgt_data,raw_factor)
-    # tmp1 = raw_factor['Codes'].drop_duplicates().to_list()
-    # tmp2 = hs300_trade_data['ts_code'].drop_duplicates().to_list()
-    # ss = hs300_wgt_data['sec_code']
-    # print(set(ss).difference(set(tmp1)))
-    # print(set(ss).difference(set(tmp2)))
-    # exit()
     for idx, date in enumerate(date_list):
         factor_data = raw_factor[raw_factor.trade_date == date]
         overall_score = get_factor_score(factor_data, 'Overall_Factor')
@@ -157,15 +189,15 @@ def main():
         trade_ts_codes = specific_day_trade_data['ts_code']
         hs300_ts_codes = specific_day_hs300_wgt['ts_code']
         suspend_stock_code = select_suspend_stock(trade_ts_codes, hs300_ts_codes)
-        # init model
         original_weight = get_ts_code_original_weight(specific_day_hs300_wgt)
+        # init model
         model, weight, weight_binary = init_model(hs300_ts_codes, original_weight, overall_score)
         add_stock_constr(model, weight, weight_binary, hs300_ts_codes)
         if pre_date:
-            pre_opt_weight = get_pre_opt_weight(wgt_opt_df, pre_date)
+            adjust_weight = get_adjust_weight(wgt_opt_df, pre_date)
         else:
-            pre_opt_weight = None
-        add_trade_constr(model, weight, weight_binary, suspend_stock_code, pre_opt_weight)
+            adjust_weight = None
+        add_trade_constr(model, weight, weight_binary, suspend_stock_code, adjust_weight)
         add_industry_constr(model, weight, factor_data)
         for fac in constr_factor:
             add_factor_constr(model, weight, factor_data, original_weight, fac)
@@ -181,10 +213,13 @@ def main():
         else:
             print('data {} infeasible'.format(date))
             exit()
-        exit()
-        vars_opt['position'] = np.dot(opt_weight, close)
+        close_price = get_stock_close_price(specific_day_trade_data)
+        stock_position = compute_position(close_price, weight)
+        for key, val in stock_position:
+            vars_opt.loc[key, 'position'] = val
         wgt_opt_df = wgt_opt_df.merge(vars_opt, how='left',
-                         left_on=['sec_code', 'Date'], right_on=['ts_code', 'trade_date'])
+                                      left_on=['sec_code', 'Date'],
+                                      right_on=['ts_code', 'trade_date'])
         print(wgt_opt_df.tail)
         exit()
 
