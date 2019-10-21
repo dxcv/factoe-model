@@ -150,24 +150,24 @@ def compute_factor(data_df, date_factor, industry_factor):
                 continue
             else:
                 # size
-                raw_file1["Size_Factor"] = compute(raw_file1['Log_mkt_Cap'], nagtive=True)
+                raw_file1["size_Factor"] = compute(raw_file1['Log_mkt_Cap'], nagtive=True)
                 # Volatility（波动率）
-                tmp = compute(raw_file1['Volatility'], nagtive=True)
-                raw_file1["Volatility_Factor"] = compute(raw_file1['Volatility'], nagtive=True)
+                tmp = compute(raw_file1['volatility'], nagtive=True)
+                raw_file1["Volatility_Factor"] = compute(raw_file1['volatility'], nagtive=True)
                 # Idiosyncratic volatility
-                raw_file1['IdioVolatility_Factor'] = compute(raw_file1['Idio_vol'], nagtive=True)
+                raw_file1['idioVolatility_Factor'] = compute(raw_file1['idio_vol'], nagtive=True)
                 # RSI 过去n：14天内多少天下降，多少天上升
                 raw_file1['RSI_Factor'] = compute(raw_file1['RSI'], nagtive=True)
                 # Momentum
-                raw_file1["Momentum_Factor"] = compute(raw_file1['last_1mon_pricechange'], nagtive=True)
+                raw_file1["momentum_factor"] = compute(raw_file1['last_1mon_pricechange'], nagtive=True)
                 # Quality
-                sd_roa = stand(raw_file1['Rev_Over_mktCap'], 0.05)  # 资产回报
+                sd_roa = stand(raw_file1['rev_over_mktCap'], 0.05)  # 资产回报
                 roa_cdf = ECDF(sd_roa)
                 sd_acc = stand(raw_file1["q_opincome"], 0.05)  # accural ？现金流
                 acc_cdf = ECDF(sd_acc)
                 sd_nocfod = stand(raw_file1['NOCF_Over_Debt'], 0.05)
                 nocfod_cdf = ECDF(sd_nocfod)
-                raw_file1["Quality_Factor"] = 0.25 * roa_cdf(sd_roa) + 0.25 * acc_cdf(sd_acc) + 0.5 * nocfod_cdf(sd_nocfod)
+                raw_file1["quality_factor"] = 0.25 * roa_cdf(sd_roa) + 0.25 * acc_cdf(sd_acc) + 0.5 * nocfod_cdf(sd_nocfod)
                 # Value
                 sd_cashval = stand(raw_file1['Cash_Over_MktCap'], 0.05)  # 现金除以市值
                 sd_sd_cashval = std_winsor(sd_cashval)
@@ -179,17 +179,17 @@ def compute_factor(data_df, date_factor, industry_factor):
                 sd_sd_bp = std_winsor(sd_bp)
                 bp_cdf = ECDF(sd_sd_bp)
 
-                raw_file1["Value_Factor"] = 1 / 3 * cashval_cdf(sd_sd_cashval) \
+                raw_file1["value_factor"] = 1 / 3 * cashval_cdf(sd_sd_cashval) \
                                             + 1 / 3 * roa_cdf(sd_sd_roa) \
                                             + 1 / 3 * bp_cdf(sd_sd_bp)
 
-                raw_file1["Overall_Factor"] = raw_file1["Size_Factor"] * 0.15 \
-                                              + raw_file1["Volatility_Factor"] * 0.5 \
-                                              + raw_file1["IdioVolatility_Factor"] * 0.5 \
-                                              + raw_file1["RSI_Factor"] * 0.5 \
-                                              + raw_file1["Momentum_Factor"] * 0.5 \
-                                              + raw_file1["Quality_Factor"] \
-                                              + raw_file1["Value_Factor"]
+                raw_file1["overall_factor"] = raw_file1["size_factor"] * 0.15 \
+                                              + raw_file1["volatility_factor"] * 0.5 \
+                                              + raw_file1["idioVolatility_factor"] * 0.5 \
+                                              + raw_file1["RSI_factor"] * 0.5 \
+                                              + raw_file1["Momentum_factor"] * 0.5 \
+                                              + raw_file1["quality_factor"] \
+                                              + raw_file1["value_factor"]
                 if raw_factor.empty:
                     raw_factor = raw_file1
                 else:

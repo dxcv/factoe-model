@@ -11,8 +11,8 @@ industry_lower_bound = 0.01
 factor_upper_bound = 0.35
 factor_lower_bound = 0.00
 
-stock_upper_bound = 0.01
-stock_lower_bound = 0.01
+stock_upper_bound = 0.005
+stock_lower_bound = 0.005
 
 constr_factor = ['Size_Factor', 'IdioVolatility_Factor', 'RSI_Factor', 'Quality_Factor', 'Value_Factor']
 
@@ -131,11 +131,14 @@ def main():
         vars_opt_weight = vars_opt_all_weight[:weight_num]
         next_date = date_list[idx+1]
         hs300_data_monthly = hs300_trading_monthly[hs300_trading_monthly.Date == next_date].reset_index(drop=True)
-        factor_data = factor_data.merge(hs300_data_monthly,
-                                        how='left',
-                                        left_on=['Codes'],
-                                        right_on=['Codes'])\
-
+        factor_data = factor_data.merge(hs300_data_monthly, how='left', left_on=['Codes'], right_on=['Codes'])
+        codd = factor_data['Codes'].drop_duplicates().to_list()
+        print(date)
+        print('000022.SZ' in codd)
+        mmm = factor_data[factor_data.Codes == '000022.SZ']
+        print(mmm['1mon_tradingreturn'])
+        # print(np.dot(vars_opt_weight, factor_data['1mon_tradingreturn']))
+        exit()
         mrawret.loc[idx+1, 'FactorModel'] = np.dot(vars_opt_weight, factor_data['1mon_tradingreturn'])
         mrawret.loc[idx+1, 'HS300Index'] = np.dot(original_weight, factor_data['1mon_tradingreturn'])
         mrawret.loc[idx+1, 'NetRet'] = mrawret.loc[idx+1, 'FactorModel'] - mrawret.loc[idx+1, 'HS300Index']

@@ -34,11 +34,7 @@ def create_stock_dict(stock_codes):
 
 
 def dict_prod(source, target):
-    # old_key = '000022.SZ'
-    # new_key = '001872.SZ'
-    # target[new_key] = target[old_key]
-    # del target[old_key]
-    assert source.keys() == target.keys()
+    assert source.keys() == target.keys(), print(set(source.keys()).difference(set(target.keys())))
     return sum(source.get(key, 0) * target.get(key, 0) for key in source.keys() | target.keys())
 
 
@@ -52,7 +48,6 @@ def prepare_data( ):
     all_data_df.drop(['ts_code', 'trade_date'], axis=1)
     all_data_df.to_csv('tmp.csv', sep=',')
     print(all_data_df.head)
-    exit()
 
 
 def select_suspend_stock(all_stock, hs300_stock):
