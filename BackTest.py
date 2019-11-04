@@ -94,19 +94,6 @@ class BackTestHs300(BackTest):
         model.setObjective(weight.prod(overall_score), gurobipy.GRB.MAXIMIZE)
         return model, weight, weight_binary
 
-    def init_ans_df(self, date_list):
-        ans = pd.DataFrame({'trade_date': date_list})
-        ans['factor_model'] = np.nan
-        ans['hs300index'] = np.nan
-        ans['net_ret'] = np.nan
-        ans.loc[0, ['factor_model', 'hs300index', 'net_ret']] = 0
-
-        ans['factor_model_cum'] = np.nan
-        ans['hs300index_cum'] = np.nan
-        ans['net_ret_cum'] = np.nan
-        ans.loc[0, ['factor_model_cum', 'hs300index_cum', 'net_ret_cum']] = 1000
-        return ans
-
     def add_trade_constr(self, model, weight, weight_binary,
                          suspend_stock, adjust_weight):
         if not adjust_weight:
@@ -189,5 +176,5 @@ class BackTestHs300(BackTest):
             model.computeIIS()
             model.write("./ilp/model_{}.ilp".format(date))
             exit()
-        return opt_weight, vars_opt
+        return opt_weight, original_weight, vars_opt
 

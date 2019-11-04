@@ -3,24 +3,24 @@ from tqdm import tqdm
 import pickle as pkl
 import os
 
-hs300_trading_monthly_path = r'./data/HS300tradingmonthly.txt'
-raw_factor_path = r'./data/raw_factor_test.csv'
-hs300_trade_data_path = r'./data/399300.SZ_tradingdata_part1.csv'
-hs300_wgt_path = r'./data/HS300_idx_wt.csv'
-hs300_idx_codes_path = r'./data/399300.SZ_weight.txt'
-hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
-tmp_path = r'./data/tmp'
-
-industry_upper_bound = 0.01
-industry_lower_bound = 0.01
-
-factor_upper_bound = 0.35
-factor_lower_bound = 0.00
-
-stock_upper_bound = 0.01
-stock_lower_bound = 0.01
-
-constr_factor = ['Size_Factor', 'IdioVolatility_Factor', 'RSI_Factor', 'Quality_Factor', 'Value_Factor']
+# hs300_trading_monthly_path = r'./data/HS300tradingmonthly.txt'
+# raw_factor_path = r'./data/raw_factor_test.csv'
+# hs300_trade_data_path = r'./data/399300.SZ_tradingdata_part1.csv'
+# hs300_wgt_path = r'./data/HS300_idx_wt.csv'
+# hs300_idx_codes_path = r'./data/399300.SZ_weight.txt'
+# hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
+# tmp_path = r'./data/tmp'
+#
+# industry_upper_bound = 0.01
+# industry_lower_bound = 0.01
+#
+# factor_upper_bound = 0.35
+# factor_lower_bound = 0.00
+#
+# stock_upper_bound = 0.01
+# stock_lower_bound = 0.01
+#
+# constr_factor = ['Size_Factor', 'IdioVolatility_Factor', 'RSI_Factor', 'Quality_Factor', 'Value_Factor']
 
 
 def create_stock_dict(stock_codes):
