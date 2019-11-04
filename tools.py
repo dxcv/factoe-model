@@ -1,5 +1,7 @@
 import pandas as pd
+from tqdm import tqdm
 import pickle as pkl
+import os
 
 hs300_trading_monthly_path = r'./data/HS300tradingmonthly.txt'
 raw_factor_path = r'./data/raw_factor_test.csv'
@@ -7,6 +9,7 @@ hs300_trade_data_path = r'./data/399300.SZ_tradingdata_part1.csv'
 hs300_wgt_path = r'./data/HS300_idx_wt.csv'
 hs300_idx_codes_path = r'./data/399300.SZ_weight.txt'
 hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
+tmp_path = r'./data/tmp'
 
 industry_upper_bound = 0.01
 industry_lower_bound = 0.01
@@ -57,15 +60,6 @@ def select_suspend_stock(all_stock, hs300_stock):
     return suspend_stock
 
 
-def data_process(hs300_trading_monthly_path, raw_factor_path):
-    hs300_trading_monthly = pd.read_csv(hs300_trading_monthly_path, sep=',')
-    raw_factor = pd.read_csv(raw_factor_path, sep=',')
-    date_list = raw_factor['Date'].drop_duplicates()
-    date_list = date_list.sort_values()
-    date_list = date_list.to_list()
-    return hs300_trading_monthly, raw_factor, date_list
-
-
 def explore_data():
     raw_factor = pd.read_csv(raw_factor_path, sep=',')
     hs300_idx_df = pd.read_csv(hs300_wgt_path, sep=',')
@@ -83,3 +77,71 @@ def explore_data():
         print(len(set(hs300_idx_code.to_list()) & set(hs300_trade_date.to_list())))
         exit()
 
+
+def get_hs300_name2code(hs300_wgt_data):
+    file_name = 'hs300_name2code.pkl'
+    hs300_name2code_file_path = os.path.join(tmp_path, file_name)
+    if os.path.exists(hs300_name2code_file_path):
+        with open(hs300_name2code_file_path, 'rb') as f:
+            name2code = pkl.load(f)
+    else:
+        name2code = {}
+        all_code = hs300_wgt_data['ts_code'].drop_duplicates().to_list()
+        for code in all_code:
+            stock_name = hs300_wgt_data[hs300_wgt_data.ts_code == code]['stock_name']
+            stock_name = stock_name.iloc[0]
+            name2code[stock_name] = code
+        with open(hs300_name2code_file_path, 'wb') as f:
+            pkl.dump(name2code, f)
+    return name2code
+
+
+def get_hs300_datelist(hs300_wgt_data):
+    return hs300_wgt_data['trade_date'].drop_duplicates().to_list()
+
+
+def prepare_hs300_wgt_df():
+    destination = tmp_path
+    if not os.path.exists(destination):
+        os.makedirs(destination)
+    hs300_wgt_data = pd.read_csv(hs300_wgt_path, sep=',')
+    rename_dict = {
+        'sec_code': "ts_code",
+        'sec_name': 'stock_name',
+        'Date': 'trade_date'}
+    hs300_wgt_data = hs300_wgt_data.drop(columns='Adjust date')
+    hs300_wgt_data = hs300_wgt_data.rename(columns=rename_dict)
+    name2code = get_hs300_name2code(hs300_wgt_data)
+    code2name = dict([(val, key) for key, val in name2code.items()])
+    date_list = get_hs300_datelist(hs300_wgt_data)
+    date_list.sort()
+    code_set = set([])
+    hs300_col_name = hs300_wgt_data.columns.to_list()
+    nan_data = pd.Series(index=hs300_col_name)
+    hs300_wgt_df = pd.DataFrame(columns=hs300_col_name)
+    for date in date_list:
+        day_wgt_data = hs300_wgt_data[hs300_wgt_data.trade_date == date]
+        day_code_list = day_wgt_data['ts_code'].to_list()
+        day_code_list = set(day_code_list)
+        code_set.update(set(day_code_list))
+        day_diff_code_list = code_set.difference(day_code_list)
+        # print('day {} add '.format(date), len(day_diff_code_list))
+        hs300_wgt_df = hs300_wgt_df.append(day_wgt_data, ignore_index=True)
+        if day_diff_code_list:
+            nan_col_code = list(day_diff_code_list)
+            nan_col_name = [code2name[i] for i in day_diff_code_list]
+            nan_dict = {
+                'ts_code': nan_col_code,
+                'stock_name': nan_col_name,
+                'weight': 0,
+                'trade_date': date
+            }
+            nan_df = pd.DataFrame(nan_dict)
+            hs300_wgt_df = hs300_wgt_df.append(nan_df, ignore_index=True)
+            # print('add {} {} on the date {}'.format(code, code2name[code], date))
+    hs300_wgt_df.to_csv(os.path.join(destination, 'hs300_wgt_df.csv'), sep=',')
+    return hs300_wgt_df
+
+
+if __name__ == '__main__':
+    prepare_hs300_wgt_df()

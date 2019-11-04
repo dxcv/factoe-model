@@ -4,7 +4,7 @@ import numpy as np
 from pprint import pprint
 from tqdm import tqdm
 from matplotlib import pyplot as plt
-from time import time
+
 industry_upper_bound = 0.01
 industry_lower_bound = 0.01
 
@@ -113,8 +113,6 @@ def main():
             add_factor_constr(model, weight, factor_data, original_weight, fac)
 
         model.optimize()
-        # model.computeIIS()
-        # model.write("model.ilp")
         vars_opt = pd.DataFrame()
         mcount = 0
         if model.status == gurobipy.GRB.Status.OPTIMAL:

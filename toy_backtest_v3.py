@@ -3,13 +3,14 @@ import gurobipy
 import copy
 from matplotlib import pyplot as plt
 from tools import *
-from data_process import read_csv
 
-hs300_trading_monthly_path = r'./data/tmp/monthly_data.csv'
-raw_factor_path = r'./data/tmp/raw_factor_test_v2.csv'
+
+hs300_trading_monthly_path = r'./data/HS300tradingmonthly.txt'
+raw_factor_path = r'./data/raw_factor_test_v1.csv'
 hs300_trade_data_path = r'./data/399300.SZ_tradingdata.txt'
-hs300_wgt_path = r'./data/tmp/hs300_wgt_df.csv'
-hs300_all_data_path = r'./data/tmp/hs300_all_trading_data_monthly.csv'
+hs300_wgt_path = r'./data/HS300_idx_wt.csv'
+hs300_idx_codes_path = r'./data/399300.SZ_weight.txt'
+hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
 
 industry_upper_bound = 0.01
 industry_lower_bound = 0.01
@@ -26,13 +27,14 @@ constr_factor = ['size_factor', 'RSI_factor', 'quality_factor', 'value_factor']
 def data_process(hs300_trading_monthly_path, raw_factor_path):
     hs300_trading_monthly = pd.read_csv(hs300_trading_monthly_path, sep=',')
     raw_factor = pd.read_csv(raw_factor_path, sep=',')
-    date_list = raw_factor['trade_date'].drop_duplicates()
+    date_list = raw_factor['Date'].drop_duplicates()
     date_list = date_list.sort_values()
     date_list = date_list.to_list()
     return hs300_trading_monthly, raw_factor, date_list
 
 
-def norm_df(hs300_trading_monthly, hs300_trade_data, hs300_wgt_data, raw_factor):
+def norm_df(hs300_trading_monthly,hs300_trade_data, hs300_wgt_data, raw_factor):
+    # hs300_trade_data = hs300_trade_data.rename(columns={"Date": "trade_date", "Codes": "ts_code"})
     raw_factor = raw_factor.replace({'Codes': '000022.SZ'}, '001872.SZ')
     hs300_trading_monthly = hs300_trading_monthly.replace({'ts_code': '000022.SZ'}, '001872.SZ')
     hs300_trade_data = hs300_trade_data.replace({'ts_code': '000022.SZ'}, '001872.SZ')
@@ -186,7 +188,8 @@ def init_model(hs300_ts_code, original_weight, overall_score, adjust_weight, sus
     return model, weight, weight_binary
 
 
-def add_trade_constr(model, weight, weight_binary, suspend_stock, adjust_weight):
+def add_trade_constr(model, weight, weight_binary,
+                     suspend_stock, adjust_weight):
     if not adjust_weight:
         adjust_weight = {}
         for stock in suspend_stock:
@@ -205,24 +208,19 @@ def add_stock_constr(model, weight, weight_binary, hs300_ts_code):
 
 
 def add_industry_constr(model, weight, factor_data, suspend_stock_code, adjust_weight):
-    all_industry = factor_data['gics_code'].drop_duplicates()
+    all_industry = factor_data['Gics'].drop_duplicates()
     all_industry = all_industry.to_list()
     all_industry.sort()
     for industry in all_industry:
-        specific_industry_df = factor_data[factor_data.gics_code == 20.0]
+        specific_industry_df = factor_data[factor_data.Gics == industry]
         if len(specific_industry_df) <= 5:
             continue
         codes = specific_industry_df.ts_code.to_list()
-        codes.sort()
-        assert len(codes) == len(set(codes)), print('codes num and set codes num',
-                                                    len(codes), len(set(codes)), industry)
-        codes = set(codes)
-
         lb = sum(specific_industry_df.weight) / 100 - industry_lower_bound
         ub = sum(specific_industry_df.weight) / 100 + industry_upper_bound
         opt_industry_weight = sum([weight[j] for j in codes])
-        model.addConstr(opt_industry_weight <= ub, name='industry_upper_bound: ' + str(industry))
-        model.addConstr(opt_industry_weight >= lb, name='industry_lowwer_bound: ' + str(industry))
+        model.addConstr(opt_industry_weight <= ub, name='industry_upper_bound: ' + industry)
+        model.addConstr(opt_industry_weight >= lb, name='industry_lowwer_bound: ' + industry)
 
 
 def add_factor_constr(model, weight, factor_data, original_weight, factor_name):
@@ -234,10 +232,12 @@ def add_factor_constr(model, weight, factor_data, original_weight, factor_name):
     model.addConstr(weight.prod(factor_score) <= upper_bound)
 
 
-def backtest():
+def main():
     hs300_trading_monthly, raw_factor, date_list = data_process(hs300_trading_monthly_path, raw_factor_path)
-    hs300_trade_data = read_csv(hs300_trade_data_path, sep='\t')
+    hs300_trade_data = pd.read_csv(hs300_trade_data_path, sep='\t')
     hs300_wgt_data = pd.read_csv(hs300_wgt_path, sep=',')
+    hs300_trading_monthly, hs300_trade_data, hs300_wgt_data, raw_factor = norm_df(hs300_trading_monthly, hs300_trade_data,
+                                                                                  hs300_wgt_data, raw_factor)
     wgt_opt_df = pd.DataFrame()
     # weight_analysis(hs300_wgt_data, date_list)
     mrawret = init_ans_df(date_list)
@@ -270,6 +270,7 @@ def backtest():
         for fac in constr_factor:
             add_factor_constr(model, weight, factor_data, original_weight, fac)
         model.optimize()
+
         vars_opt = pd.DataFrame(index=hs300_ts_codes.to_list())
         vars_opt['trade_date'] = date
         opt_weight = {}
@@ -289,14 +290,16 @@ def backtest():
             print('data {} infeasible'.format(date))
             model.computeIIS()
             model.write("./ilp/model_{}.ilp".format(date))
+            # print('date is {} symbol is {} adjust weight is {}'.format(date, symbol, adjust_weight[symbol]), track)
+            exit()
             continue
         close_price = get_stock_close_price(factor_data)
         stock_position = compute_position(close_price, opt_weight)
         track.append(['close', symbol, close_price[symbol]])
         track.append(['position', symbol, stock_position[symbol]])
-
         for key, val in stock_position.items():
             vars_opt.loc[key, 'position'] = val
+        # vars_opt = vars_opt.reset_index()
         if wgt_opt_df.empty:
             wgt_opt_df = vars_opt
         else:
@@ -304,10 +307,9 @@ def backtest():
 
         next_date = date_list[idx+1]
         pre_date = date
-        hs300_data_monthly = hs300_trading_monthly[hs300_trading_monthly.trade_date == next_date].reset_index(drop=True)
+        hs300_data_monthly = hs300_trading_monthly[hs300_trading_monthly.Date == next_date].reset_index(drop=True)
         factor_data = factor_data.merge(hs300_data_monthly, how='left', left_on=['ts_code'], right_on=['ts_code'])
         mon_trade_return = get_factor_score(factor_data, '1mon_tradingreturn')
-        tmp = dict_prod(opt_weight, mon_trade_return)
         mrawret.loc[idx+1, 'factor_model'] = dict_prod(opt_weight, mon_trade_return)
         mrawret.loc[idx+1, 'hs300index'] = dict_prod(original_weight, mon_trade_return)
         mrawret.loc[idx+1, 'net_ret'] = mrawret.loc[idx+1, 'factor_model'] - mrawret.loc[idx+1, 'hs300index']
@@ -320,7 +322,7 @@ def backtest():
     wgt_opt_df.to_csv('wgt_opt_df.csv', sep=',')
     print(sum(mrawret.loc[1:, 'net_ret'] >= 0)/len(mrawret.loc[1:, 'net_ret']))
     print(np.mean(mrawret.loc[1:, 'net_ret']) * 12)
-    mrawret.to_csv('./data/tmp/mrawret.csv', sep=',')
+    mrawret.to_csv('mrawret.csv', sep=',')
     mDate_ret = [str(mrawret.loc[x, 'trade_date']) for x in range(mrawret.shape[0])]
     mrawret['mrawret'] = mDate_ret
     mrawret['mrawret'] = pd.to_datetime(mrawret['mrawret'])
@@ -335,8 +337,8 @@ def backtest():
     ax.set_ylabel('Cumulative Return')
     ax.set_title('The Cumulative Return for the Factor Model and the HS300 Strategy')
     plt.show()
-    fig.savefig("./Factor_Model_V2_Payoff_plot_Wenzhou.pdf", dpi=100)
+    fig.savefig("./Factor_Model_V1_Payoff_plot_Wenzhou.pdf", dpi=100)
 
 
 if __name__ == '__main__':
-    backtest()
+    main()

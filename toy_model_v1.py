@@ -123,16 +123,16 @@ def compute_factor_v0(data_df,date_factor,industry_factor):
 
 
 def data_process():
-    hs300_all_data_path = r'./data/tmp/hs300_all_trading_data_monthly.csv'
-    hs300_traing_mothly_path = r'./data/tmp/monthly_data.csv'
-    hs300_all_data = pd.read_csv(hs300_all_data_path, sep=',')
+    hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
+    hs300_traing_mothly_path = r'./data/HS300tradingmonthly.txt'
+    hs300_all_data = pd.read_csv(hs300_all_data_path, sep='\t')
     hs300_traing_mothly = pd.read_csv(hs300_traing_mothly_path, sep=r',')
-    hs300_momentum = hs300_traing_mothly[['trade_date', 'ts_code', 'last_1mon_pricechange', '12monPC_1monPC']]
-    hs300_all_data = hs300_all_data.merge(hs300_momentum, how='left',
-                                          left_on=["trade_date", 'ts_code'],
-                                          right_on=["trade_date", 'ts_code'])
-    date_factor = hs300_all_data['trade_date'].drop_duplicates()
-    industry_factor = hs300_all_data['gics_code'].drop_duplicates()
+    hs300_momentum = hs300_traing_mothly[['Date', 'Codes', 'last_1mon_pricechange', '12monPC_1monPC']]
+    hs300_all_data = hs300_all_data.merge(hs300_momentum,how='left',
+                                          left_on=["Date", 'Codes'],
+                                          right_on=["Date", 'Codes'])
+    date_factor = hs300_all_data['Date'].drop_duplicates()
+    industry_factor = hs300_all_data['GicsCodes'].drop_duplicates()
     return hs300_all_data, date_factor, industry_factor
 
 
@@ -142,8 +142,8 @@ def compute_factor(data_df, date_factor, industry_factor):
     for i in industry_factor:
         print('current industry is : ', i)
         for j in tqdm(date_factor):
-            raw_file1 = data_df[data_df.trade_date == j]
-            raw_file1 = raw_file1[raw_file1.gics_code == i]
+            raw_file1 = data_df[data_df.Date == j]
+            raw_file1 = raw_file1[raw_file1.GicsCodes == i]
             # print(raw_file1.columns)
             if raw_file1.empty:
                 cnt += 1
@@ -154,7 +154,7 @@ def compute_factor(data_df, date_factor, industry_factor):
                 # Volatility（波动率）
                 raw_file1["volatility_factor"] = compute(raw_file1['Volatility'], nagtive=True)
                 # Idiosyncratic volatility
-                # raw_file1['idioVolatility_Factor'] = compute(raw_file1['idio_vol'], nagtive=True)
+                raw_file1['idioVolatility_Factor'] = compute(raw_file1['Idio_vol'], nagtive=True)
                 # RSI 过去n：14天内多少天下降，多少天上升
                 raw_file1['RSI_factor'] = compute(raw_file1['RSI'], nagtive=True)
                 # Momentum
@@ -193,16 +193,14 @@ def compute_factor(data_df, date_factor, industry_factor):
                 else:
                     raw_factor = pd.concat([raw_factor, raw_file1], axis=0)
     print("wrong count of data is ", cnt)
-    raw_factor.to_csv('./data/tmp/raw_factor_test_v2.csv', mode='w', header=True)
+    raw_factor.to_csv('raw_factor_test_v1.csv', mode='w', header=True)
 
 
 def main():
-    start = time.time()
     data_df, date_factor, industry_factor = data_process()
     date_factor = date_factor.sort_values()
     industry_factor = industry_factor.sort_values()
-    compute_factor(data_df,date_factor, industry_factor)
-    print('cost time:', time.time()-start)
+    compute_factor(data_df,date_factor,industry_factor)
 
 
 if __name__ == '__main__':
