@@ -1,5 +1,4 @@
 from data_process import *
-from toy_backtest_v2 import backtest
 from Factor import *
 
 
@@ -63,7 +62,7 @@ class FactorModelHs300(FactorModel):
         return balancesheetdata,incomedata,cashflowdata,fina_indicatordata
 
     def prepare_finacial_data(
-            self, balancesheetdata, incomedata, cashflowdata,fina_indicatordata):
+            self, balancesheetdata, incomedata, cashflowdata, fina_indicatordata):
         trading_data = self.trading_data
         config = self.config
         vol_lag = config.vol_lag
@@ -144,7 +143,5 @@ class FactorModelHs300(FactorModel):
                 else:
                     self.raw_factor = pd.concat([self.raw_factor, raw_data], axis=0)
 
-    def backtest(self):
-        backtest()
 
 

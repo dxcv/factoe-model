@@ -1,203 +1,142 @@
 import pandas as pd
+from matplotlib import pyplot as plt
 import numpy as np
 import math
 from tqdm import tqdm
-import copy
-import statsmodels.api as sm
-from data_process import *
-import bisect
-from collections import namedtuple
-
-trim_perct = 5  # the cutoff percent for the percent winsorizing
-
-std_num = 3  # the cutoff number of the standard deviation for winsorzing
-
-listed_num = 1  # only choose the industry has at least 5 listed firms
-
-factor_names = ["Size_Factor", 'Volatility_Factor', 'IdioVolatility_Factor', 'RSI_Factor', 'Momentum_Factor',
-                'Quality_Factor', 'Value_Factor']  # the names of the five factors
-
-Overall_weight = [0.15, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0]  # the weight of five factors in the overall factor: factor_names
-
-Quality_weight = [0.25, 0.25, 0.5]  # the weight for the quality factor: Rev_Over_mktCap, Accural, NOCF_Over_Debt
-
-Value_weight = [1 / 3, 1 / 3, 1 / 3]  # the weight for the value factor: Cash_Over_MktCap, Rev_Over_mktCap, BP
-
-vol_lag = 60  # the lag for the volatility
-
-rsi_lag = 10  # the lag for the RSI
-
-balance_data_path = r'./data/399300.SZ_balancesheetdata.txt'
-income_data_path = r'./data/399300.SZ_incomedata.txt'
-cashflow_data_path = r'./data/399300.SZ_cashflowdata.txt'
-fina_indicator_data_path = r'./data/399300.SZ_fina_indicatordata.txt'
-hs300_trading_monthly_fill_nan_path = r'./data/tmp/HS300tradingmonthly_fill_nan.txt'
+from toy_backtest_v2 import get_stock_close_price
+from data_process import read_csv, get_name2code
 
 
-def prepare_balance_sheet_dict(specific_code_balance_sheet_data):
-    f_ann_date = specific_code_balance_sheet_data['f_ann_date']
-    ann_date = specific_code_balance_sheet_data['ann_date']
-    end_date = specific_code_balance_sheet_data['end_date']
-    total_liab = specific_code_balance_sheet_data['total_liab']
-    balance_sheet_dict = dict([(x, (y, z, w)) for x, y, z, w in
-                               zip(f_ann_date, ann_date, end_date, total_liab)])
-    return balance_sheet_dict
+def get_ts_code_original_weight(hs300_wgt_data, date=None):
+    if date:
+        hs300_wgt_data = hs300_wgt_data[hs300_wgt_data.trade_date == date]
+    original_weight = {}
+    num = len(hs300_wgt_data)
+    date_list = hs300_wgt_data['trade_date'].drop_duplicates().to_list()
+    assert len(date_list) == 1, print('the {} hs300_wgt_data has more one days data'.format(date_list))
+    assert num >= 280, print('the num of hs300 is not 300 in date {} '.format(date_list), 'actual num is {}'.format(num))
+    for i in range(num):
+        tmp = hs300_wgt_data.iloc[i]
+        ts_code = tmp['ts_code']
+        weight = tmp['weight']
+        assert ts_code is not None, print('check the ts_code in date {} code is {}'.format(date, ts_code))
+        assert weight is not None, print('check the weight in date {} code is {}'.format(date, weight))
+        original_weight[ts_code] = weight/100
+    assert abs(1 - sum(original_weight.values())) <= 0.01, print(sum(original_weight.values()))
+    return original_weight
 
 
-def get_code_list(hs300_all_data):
-    code_list = hs300_all_data['ts_code'].drop_duplicates().to_list()
-    return code_list
+def select_suspend_stock(trade_code, wgt_code):
+    trade_code = set(trade_code)
+    wgt_code = set(wgt_code)
+    suspend_stock = wgt_code.difference(trade_code)
+    return suspend_stock
 
 
-def merge_balance_sheet(hs300_all_data, hs300_balance_sheet):
-    code_list = get_code_list(hs300_all_data)
-    new_hs300_all_data = pd.DataFrame()
-    tmp_date_list = hs300_all_data['trade_date'].drop_duplicates().to_list()
-    tmp_date_list.sort()
-    for code in code_list:
-        code_hs300_all_data = hs300_all_data[hs300_all_data.ts_code == code].reset_index(drop=True)
-        code_hs300_all_data['total_liab'] = np.nan
-        all_data_date_list = code_hs300_all_data['trade_date'].drop_duplicates().to_list()
-        all_data_date_list.sort()
-        code_hs300_all_data = code_hs300_all_data.set_index(keys='trade_date')
-        code_hs300_balance_data = hs300_balance_sheet[hs300_balance_sheet.ts_code == code]
-        balance_data_dict = prepare_balance_sheet_dict(code_hs300_balance_data)
-        balance_date_list = list(balance_data_dict.keys())
-        balance_date_list.sort()
-        for date in all_data_date_list:
-            b_date_index = bisect.bisect_left(balance_date_list, date)
-            b_date = balance_date_list[b_date_index - 1]
-            tmp = balance_data_dict[b_date][-1]
-            while np.isnan(balance_data_dict[b_date][-1]):
-                b_date_index -= 1
-                b_date = balance_date_list[b_date_index - 1]
-            code_hs300_all_data[date, 'total_liab'] = balance_data_dict[b_date][-1]
-        new_hs300_all_data.append(code_hs300_all_data.reset_index())
-    new_hs300_all_data.to_csv('./data/tmp/hs300_add_balance.csv',index=False)
-    return new_hs300_all_data
+def get_market_value(trade_data):
+    market_val = {}
+    num = len(trade_data)
+    for i in range(num):
+        tmp = trade_data.iloc[i]
+        ts_code = tmp['ts_code']
+        circ_mv = tmp['circ_mv']
+        total_mv = tmp['total_mv']
+        weight = circ_mv/total_mv
+        weight = myround(weight)
+        market_val[ts_code] = weight * total_mv
+    return market_val
+
+
+def caculate_weight_by_market_value(wgt_code, market_value):
+    total_mv = 0
+    wgt = {}
+    for code in wgt_code:
+        total_mv += market_value[code]
+        wgt[code] = market_value[code]
+    for key, val in wgt.items():
+        wgt[key] = val/total_mv
+    return wgt
+
+
+def compute_market_value_by_shares(shares, price):
+    mv = {}
+    for k, v in shares.items():
+        mv[k] = shares[k] * price[k]
+    return mv
+
+
+def get_share(trade_data, share_name):
+    share = {}
+    for i in range(len(trade_data)):
+        tmp = trade_data.iloc[i]
+        sh = tmp[share_name]
+        ts_code = tmp['ts_code']
+        share[ts_code] = sh
+    return share
+
+
+def myround(x):
+    x = np.piecewise(
+        x,
+        [x <= 0.15, 0.15 < x <= 0.2, 0.2 < x <= 0.3, 0.3 < x <= 0.4, 0.4 < x <= 0.5,
+         0.5 < x <= 0.6, 0.6 < x <= 0.7, 0.7 < x <= 0.8, x > 0.8],
+        [lambda x:math.ceil(x*100)/100, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0]
+    )
+    return x
+
+
+def describe_diff(a, b, wgt_df_day, code2name):
+    wgt_code = wgt_df_day['ts_code'].drop_duplicates().to_list()
+    diff = {}
+    for code in wgt_code:
+        diff[code] = np.abs(a[code] - b[code])
+    val2key = dict([(v, k) for k, v in diff.items()])
+    print('min stock', code2name[val2key[min(diff.values())]])
+    print('max stock', code2name[val2key[max(diff.values())]])
+    tmp = pd.Series(list(diff.values()))
+    print(tmp.describe(percentiles=np.array(range(1, 101))/100))
+
+
+def main():
+    wgt_path = r'./data/HS300_idx_wt.csv'
+    trade_data_path = r'./data/tmp/fixed_daily_data.csv'
+    idx_df = r'./data/HS300_idx_wt.csv'
+    name2code = get_name2code(wgt_path)
+    code2name = dict([(v, k) for k, v in name2code.items()])
+    wgt_df = read_csv(wgt_path)
+    trade_df = read_csv(trade_data_path)
+    idx_df = read_csv(idx_df)
+    date_list = wgt_df['trade_date'].drop_duplicates().to_list()
+    date_list.sort()
+    for date in date_list[::-1]:
+        date = 20190531
+        idx_df_day = idx_df[idx_df.trade_date == date]
+        wgt_df_day = wgt_df[wgt_df.trade_date == date]
+        trade_df_day = trade_df[trade_df.trade_date == date][['ts_code', 'trade_date', 'total_mv',
+                                                              'circ_mv', 'total_share', 'close',
+                                                              'float_share', 'free_share']]
+        wgt_code = idx_df_day['ts_code'].drop_duplicates().to_list()
+        trade_code = trade_df_day['ts_code'].drop_duplicates().to_list()
+        suspended_stock = select_suspend_stock(trade_code, wgt_code)
+        if len(suspended_stock) == 0:
+            print(date)
+            original_weight = get_ts_code_original_weight(idx_df_day)
+            mkt_val = get_market_value(trade_df_day)
+            wgt = caculate_weight_by_market_value(wgt_code, mkt_val)
+            for i in range(len(trade_code)-1):
+                a, b = trade_code[i], trade_code[i+1]
+                try:
+                    r_a = original_weight[a]
+                    r_b = original_weight[b]
+                    b1 = r_a/r_b
+                    w_a = wgt[a]
+                    w_b = wgt[b]
+                    b2 = w_a/w_b
+                    print(b1-b2)
+                except:
+                    continue
+            exit()
 
 
 if __name__ == '__main__':
-    HS300_tradingdata = read_csv(hs300_trade_data_path, '\t')
-    hs300_trading_monthly_fill_nan = pd.read_csv(hs300_trading_monthly_fill_nan_path)
-    HS300alldata = hs300_trading_monthly_fill_nan
-
-    HS300_balancesheetdata = read_csv(balance_data_path, sep='\t')
-    HS300_incomedata = read_csv(income_data_path, sep='\t')
-    HS300_cashflowdata = read_csv(cashflow_data_path, sep='\t')
-    HS300_fina_indicatordata = read_csv(fina_indicator_data_path, sep='\t')
-    merge_balance_sheet(HS300alldata, HS300_balancesheetdata)
-
-#
-# ## 2.5 append the financial data into HS300alldata
-# HS300alldata['total_liab'] = np.nan
-# HS300alldata['n_cashflow_act'] = np.nan
-# HS300alldata['revenue'] = np.nan
-# HS300alldata['fcff'] = np.nan
-# HS300alldata['roa'] = np.nan
-# HS300alldata['q_opincome'] = np.nan
-#
-# for i in tqdm(range(HS300alldata.shape[0])):
-#     mbalancesheet = HS300_balancesheetdata.loc[HS300_balancesheetdata.ts_code == HS300alldata.loc[i, 'ts_code']]
-#     mbalancesheet_last = mbalancesheet.loc[mbalancesheet.f_ann_date <= HS300alldata.loc[i, 'trade_date']].reset_index(
-#         drop=True)
-#     if mbalancesheet_last.shape[0] > 0:
-#         m_total_liab = mbalancesheet_last.loc[~(np.isnan(mbalancesheet_last.total_liab))].reset_index(drop=True)
-#         if m_total_liab.shape[0] > 0:
-#             HS300alldata.loc[i, 'total_liab'] = m_total_liab.loc[0, 'total_liab']
-#     mcashflow = copy.deepcopy(HS300_cashflowdata.loc[HS300_cashflowdata.ts_code == HS300alldata.loc[i, 'ts_code']])
-#     mcashflow_last = copy.deepcopy(
-#         mcashflow.loc[mcashflow.f_ann_date <= HS300alldata.loc[i, 'trade_date']].reset_index(drop=True))
-#     if mcashflow_last.shape[0] > 0:
-#         m_n_cashflow_act = copy.deepcopy(
-#             mcashflow_last.loc[~(np.isnan(mcashflow_last.n_cashflow_act))].reset_index(drop=True))
-#         if m_n_cashflow_act.shape[0] > 0:
-#             HS300alldata.loc[i, 'n_cashflow_act'] = m_n_cashflow_act.loc[0, 'n_cashflow_act']
-#     ## income: revenue
-#     mincome = copy.deepcopy(HS300_incomedata.loc[HS300_incomedata.ts_code == HS300alldata.loc[i, 'ts_code']])
-#     mincome_last = copy.deepcopy(
-#         mincome.loc[mincome.f_ann_date <= HS300alldata.loc[i, 'trade_date']].reset_index(drop=True))
-#     if mincome_last.shape[0] > 0:
-#         m_income = copy.deepcopy(mincome_last.loc[~(np.isnan(mincome_last.revenue))].reset_index(drop=True))
-#         if m_income.shape[0] > 0:
-#             HS300alldata.loc[i, 'revenue'] = m_income.loc[0, 'revenue']
-#     ## financial indicator:fcff, roa and q_opincome
-#     mindicator = copy.deepcopy(
-#         HS300_fina_indicatordata.loc[HS300_fina_indicatordata.ts_code == HS300alldata.loc[i, 'ts_code']])
-#     mindicator_last = copy.deepcopy(
-#         mindicator.loc[mindicator.ann_date <= HS300alldata.loc[i, 'trade_date']].reset_index(drop=True))
-#     if mindicator_last.shape[0] > 0:
-#         m_fcff = copy.deepcopy(mindicator_last.loc[~(np.isnan(mindicator_last.fcff))].reset_index(drop=True))
-#         if m_fcff.shape[0] > 0:
-#             HS300alldata.loc[i, 'fcff'] = m_fcff.loc[0, 'fcff']
-#         m_roa = copy.deepcopy(mindicator_last.loc[~(np.isnan(mindicator_last.roa))].reset_index(drop=True))
-#         if m_roa.shape[0] > 0:
-#             HS300alldata.loc[i, 'roa'] = m_roa.loc[0, 'roa']
-#         m_q_opincome = copy.deepcopy(
-#             mindicator_last.loc[~(np.isnan(mindicator_last.q_opincome))].reset_index(drop=True))
-#         if m_q_opincome.shape[0] > 0:
-#             HS300alldata.loc[i, 'q_opincome'] = m_q_opincome.loc[0, 'q_opincome']
-#
-#
-# HS300alldata.to_csv('./data/tmp/hs300_all_data.csv')
-# HS300alldata["Log_mkt_Cap"] = np.log(list(HS300alldata["total_mv"]))
-# HS300alldata["Cash_Over_MktCap"] = HS300alldata.fcff.div(HS300alldata.total_mv, axis=0)
-# HS300alldata["Rev_Over_mktCap"] = HS300alldata.revenue.div(HS300alldata.total_mv, axis=0)
-# HS300alldata["NOCF_Over_Debt"] = HS300alldata.n_cashflow_act.div(HS300alldata.total_liab, axis=0)
-#
-# ################################################################
-# ############ Step Three: volatility for the last 60 trading days
-# HS300alldata['Volatility'] = np.nan
-# for i in tqdm(range(HS300alldata.shape[0])):
-#     mtradingdata_vol = copy.deepcopy(HS300_tradingdata.loc[HS300_tradingdata.ts_code == HS300alldata.loc[i, 'ts_code']])
-#     mtradingdata_vol1 = copy.deepcopy(
-#         mtradingdata_vol.loc[mtradingdata_vol.trade_date < HS300alldata.loc[i, 'trade_date']].reset_index(drop=True))
-#     ## volatility
-#     if (mtradingdata_vol1.shape[0] >= vol_lag):
-#         HS300alldata.loc[i, 'Volatility'] = np.nanstd(mtradingdata_vol1.loc[:(vol_lag - 1), 'pct_chg_hfq'])
-#         # print(str(i)+' : ' + 'has volatility data')
-#     else:
-#         print(str(i) + ' : ' + 'has no volatility data')
-# HS300alldata.to_csv('./data/tmp/hs300_all_data.csv')
-# ############################################################################
-# ############ Step Four: Idiosyncratic volatility and Relative Strength Index
-# ## input the daily trading data of HS300 index
-# index_data_path = r'./data/HS300indexdata.txt'
-# HS300indexdata = pd.read_csv(index_data_path, sep='\t')
-# HS300alldata['Idio_vol'] = np.nan
-# HS300alldata['RSI'] = np.nan
-# for i in tqdm(range(HS300alldata.shape[0])):
-#     mtradingdata_ivol = copy.deepcopy(
-#         HS300_tradingdata.loc[HS300_tradingdata.ts_code == HS300alldata.loc[i, 'ts_code']])
-#     mtradingdata_ivol1 = copy.deepcopy(
-#         mtradingdata_ivol.loc[mtradingdata_ivol.trade_date < HS300alldata.loc[i, 'trade_date']].reset_index(drop=True))
-#     ## Idiosyncratic volatility for the last 60 days
-#     if (mtradingdata_ivol1.shape[0] >= vol_lag):
-#         mtradingdata_ivol1_last = copy.deepcopy(mtradingdata_ivol1.loc[:(vol_lag - 1)].reset_index(drop=True))
-#         mtradingdata_ivol1_last = copy.deepcopy(
-#             mtradingdata_ivol1_last.merge(HS300indexdata, how='inner', left_on=['trade_date'], right_on=["trade_date"]))
-#         y = mtradingdata_ivol1_last.pct_chg_hfq
-#         X = mtradingdata_ivol1_last.pct_chg_y
-#         X = sm.add_constant(X)
-#         est = sm.OLS(y, X).fit()
-#         y_hat = est.predict(X)
-#         HS300alldata.loc[i, 'Idio_vol'] = np.nanstd(y - y_hat)
-#     else:
-#         print(str(i) + ' : ' + 'has no idiosyncratic volatility data')
-#     if (mtradingdata_ivol1.shape[0] >= rsi_lag):
-#         mtradingdata_rsi_last = copy.deepcopy(mtradingdata_ivol1.loc[:(rsi_lag - 1)].reset_index(drop=True))
-#         mGain = sum(mtradingdata_rsi_last.loc[mtradingdata_rsi_last.pct_chg_hfq > 0, 'pct_chg_hfq'])
-#         mLoss = np.abs(sum(mtradingdata_rsi_last.loc[mtradingdata_rsi_last.pct_chg_hfq < 0, 'pct_chg_hfq']))
-#         HS300alldata.loc[i, 'RSI'] = (mGain / (mGain + mLoss)) * 100
-# HS300alldata.to_csv('./data/tmp/hs300_all_data.csv')
-# exit()
-
-
-
-
-
-
-
-
-
-
+    main()

@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -61,14 +60,14 @@ def compute(x, nagtive=False):
 def data_process_v0():
     data_path = r'./data/Data_industry.csv'
     data_df = pd.read_csv(data_path)
-    data_df = data_df[data_df.Date>=20100226]
+    data_df = data_df[data_df.Date >= 20100226]
     data_df = data_df.drop_duplicates()
     factor_date = data_df['Date'].drop_duplicates()
     factor_all_industry = data_df['FirstIndustryCode'].drop_duplicates()
     return data_df, factor_date, factor_all_industry
 
 
-def compute_factor_v0(data_df,date_factor,industry_factor):
+def compute_factor_v0(data_df, date_factor, industry_factor):
     raw_factor = None
     cnt = 0
     for i in industry_factor:
@@ -109,17 +108,18 @@ def compute_factor_v0(data_df,date_factor,industry_factor):
                 raw_file1["value_factor"] = 1 / 3 * cashval_cdf(sd_sd_cashval) \
                                             + 1 / 3 * roa_cdf(sd_sd_roa) \
                                             + 1 / 3 * bp_cdf(sd_sd_bp)
+
                 raw_file1["overall_factor"] = raw_file1["value_factor"] \
                                               + raw_file1["qa_factor"] \
                                               + raw_file1["mo_factor"] \
                                               + raw_file1["vol_factor"] \
                                               + raw_file1["size_factor"] * 0.15
-                if not raw_factor:
+                if raw_factor is not None:
                     raw_factor = raw_file1
                 else:
                     raw_factor = pd.concat([raw_factor, raw_file1], axis=0)
     print("wrong count of data is ", cnt)
-    raw_factor.to_csv('raw_factor_test.csv', mode='w', header=True)
+    raw_factor.to_csv('raw_factor_test_ffff.csv', mode='w', header=True)
 
 
 def data_process():
@@ -197,10 +197,10 @@ def compute_factor(data_df, date_factor, industry_factor):
 
 
 def main():
-    data_df, date_factor, industry_factor = data_process()
+    data_df, date_factor, industry_factor = data_process_v0()
     date_factor = date_factor.sort_values()
     industry_factor = industry_factor.sort_values()
-    compute_factor(data_df,date_factor,industry_factor)
+    compute_factor_v0(data_df,date_factor,industry_factor)
 
 
 if __name__ == '__main__':

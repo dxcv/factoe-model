@@ -1,21 +1,17 @@
-import numpy as np
-from configuration import Config
-import gurobipy
 import copy
-from matplotlib import pyplot as plt
+import numpy as np
 from tools import *
-import json
-from data_process import read_csv
+from configuration import Config
 from BackTest import BackTestHs300
+from matplotlib import pyplot as plt
+from data_process import read_csv, load_obj
 
 
-def data_process(hs300_trading_monthly_path, raw_factor_path):
-    hs300_trading_monthly = pd.read_csv(hs300_trading_monthly_path, sep=',')
+def data_process(opt_monthly_data_path, raw_factor_path, trade_monthly_data_path):
+    opt_monthly_data = pd.read_csv(opt_monthly_data_path)
+    trade_monthly_data = pd.read_csv(trade_monthly_data_path)
     raw_factor = pd.read_csv(raw_factor_path, sep=',')
-    date_list = raw_factor['trade_date'].drop_duplicates()
-    date_list = date_list.sort_values()
-    date_list = date_list.to_list()
-    return hs300_trading_monthly, raw_factor, date_list
+    return opt_monthly_data, trade_monthly_data, raw_factor
 
 
 def norm_df(hs300_trading_monthly, hs300_trade_data, hs300_wgt_data, raw_factor):
@@ -94,18 +90,21 @@ def get_position(wgt_opt_df, date=None):
     return position
 
 
-def get_adjust_weight(wgt_opt_df, trade_data, date):
-    df = wgt_opt_df[wgt_opt_df.trade_date == date]
-    trade_data= trade_data[trade_data.trade_date == date]
+def get_adjust_weight(wgt_opt_df, trade_data, predate, curdate):
+    df = wgt_opt_df[wgt_opt_df.trade_date == predate]
+    code_list = df['ts_code'].drop_duplicates().to_list()
+    trade_data = trade_data[trade_data.trade_date == curdate]
     close_price = get_stock_close_price(trade_data)
+    close_price_filter = {}
+    for code in code_list:
+        close_price_filter[code] = close_price[code]
     position = get_position(df)
-    adjust_weight = compute_weight_by_position(position, close_price)
+    adjust_weight = compute_weight_by_position(position, close_price_filter)
     return adjust_weight
 
 
 def compute_position(close_price, weight):
     position = {}
-    # assert close_price.keys() == weight.keys()
     for key, val in weight.items():
         position[key] = val / close_price[key]
     return position
@@ -145,30 +144,42 @@ def init_ans_df(date_list):
 def main():
     config_path = r'./config/config.json'
     config = Config(config_path)
-    hs300_trading_monthly_path = config.hs300_trading_monthly_path
+    opt_monthly_data_path = config.opt_monthly_data_path
+    trade_monthly_data_path = config.trade_monthly_data_path
     raw_factor_path = config.raw_factor_path
-    hs300_trade_data_path = config.hs300_trade_data_path
-    hs300_wgt_path = config.hs300_wgt_path
-    hs300_trading_monthly, raw_factor, date_list = data_process(hs300_trading_monthly_path, raw_factor_path)
-    hs300_trade_data = read_csv(hs300_trade_data_path, sep='\t')
-    hs300_wgt_data = pd.read_csv(hs300_wgt_path, sep=',')
+    daily_data_path = config.daily_data_path
+    # fixed_wgt_data_path = config.fixed_weight_data_path
+    fixed_wgt_data_path = config.fixed_opt_weight_data_path
+    mrawret_save_path = config.mrawret_save_path
+    image_save_path = config.image_save_path
+    opt_weight_save_path = config.opt_weight_save_path
+    opt2trade = config.opt2trade
+    opt_monthly_data, trade_monthly_data, raw_factor = data_process(opt_monthly_data_path,
+                                                                    raw_factor_path,
+                                                                    trade_monthly_data_path)
+    trade_date_list = trade_monthly_data['trade_date'].drop_duplicates().to_list()
+    opt_date_list = opt_monthly_data['trade_date'].drop_duplicates().to_list()
+    # opt2trade = load_obj(opt2trade)
+    daily_data = read_csv(daily_data_path, sep='\t')
+    wgt_data = pd.read_csv(fixed_wgt_data_path)
     wgt_opt_df = pd.DataFrame()
-    mrawret = init_ans_df(date_list)
-    pre_date = None
+    mrawret = init_ans_df(trade_date_list)
+    pre_trade_date = None
+    adjust_weight = None
     backtest = BackTestHs300(config=config)
-    for idx, date in tqdm(enumerate(date_list)):
-        if idx >= len(date_list)-1:
-            break
-        factor_data = raw_factor[raw_factor.trade_date == date]
-        specific_day_trade_data = hs300_trade_data[hs300_trade_data.trade_date == date]
-        specific_day_hs300_wgt = hs300_wgt_data[hs300_wgt_data.trade_date == date]
-        if pre_date:
-            adjust_weight = get_adjust_weight(wgt_opt_df, raw_factor, pre_date)
-        else:
-            adjust_weight = None
+    for idx, opt_date in enumerate(opt_date_list[:-1]):
+        if opt_date < 20050429:
+            continue
+        trade_date = opt_date
+        specific_day_factor_data = raw_factor[raw_factor.trade_date == opt_date]
+        specific_day_wgt_data = wgt_data[wgt_data.trade_date == opt_date]
+        specific_day_daily_data = daily_data[daily_data.trade_date == trade_date]
+        specific_day_trade_data = trade_monthly_data[trade_monthly_data.trade_date == trade_date]
+        if pre_trade_date:
+            adjust_weight = get_adjust_weight(wgt_opt_df, trade_monthly_data, pre_trade_date, trade_date)
         opt_weight, original_weight, vars_opt = backtest.optimize(
-            factor_data, specific_day_trade_data, specific_day_hs300_wgt, adjust_weight, date)
-        close_price = get_stock_close_price(factor_data)
+            specific_day_factor_data, specific_day_daily_data, specific_day_wgt_data, adjust_weight, trade_date)
+        close_price = get_stock_close_price(specific_day_trade_data)
         stock_position = compute_position(close_price, opt_weight)
         for key, val in stock_position.items():
             vars_opt.loc[key, 'position'] = val
@@ -176,11 +187,15 @@ def main():
             wgt_opt_df = vars_opt
         else:
             wgt_opt_df = pd.concat([wgt_opt_df, vars_opt], axis=0)
-        next_date = date_list[idx+1]
-        pre_date = date
-        hs300_data_monthly = hs300_trading_monthly[hs300_trading_monthly.trade_date == next_date].reset_index(drop=True)
-        factor_data = factor_data.merge(hs300_data_monthly, how='left', left_on=['ts_code'], right_on=['ts_code'])
-        mon_trade_return = backtest.get_factor_score(factor_data, '1mon_tradingreturn')
+
+        opt_next_date = opt_date_list[idx+1]
+        # trade_next_date = opt2trade[opt_next_date]
+        trade_next_date = opt_next_date
+        pre_trade_date = trade_date
+        next_trade_day_data = trade_monthly_data[trade_monthly_data.trade_date == trade_next_date]
+        next_trade_day_data = next_trade_day_data[['ts_code', '1mon_tradingreturn']]
+        specific_day_wgt_data = specific_day_wgt_data.merge(next_trade_day_data, how='left', on=['ts_code'])
+        mon_trade_return = backtest.get_factor_score(specific_day_wgt_data, '1mon_tradingreturn')
         mrawret.loc[idx+1, 'factor_model'] = dict_prod(opt_weight, mon_trade_return)
         mrawret.loc[idx+1, 'hs300index'] = dict_prod(original_weight, mon_trade_return)
         mrawret.loc[idx+1, 'net_ret'] = mrawret.loc[idx+1, 'factor_model'] - mrawret.loc[idx+1, 'hs300index']
@@ -190,10 +205,10 @@ def main():
                                                (1 + mrawret.loc[idx+1, 'hs300index'])
         mrawret.loc[idx+1, 'net_ret_cum'] = mrawret.loc[idx, 'net_ret_cum'] * \
                                            (1 + mrawret.loc[idx+1, 'net_ret'])
-    wgt_opt_df.to_csv('wgt_opt_df.csv', sep=',')
+    wgt_opt_df.to_csv(opt_weight_save_path, sep=',')
     print(sum(mrawret.loc[1:, 'net_ret'] >= 0)/len(mrawret.loc[1:, 'net_ret']))
     print(np.mean(mrawret.loc[1:, 'net_ret']) * 12)
-    mrawret.to_csv('./data/tmp/mrawret.csv', sep=',')
+    mrawret.to_csv(mrawret_save_path, sep=',',index=False)
     mDate_ret = [str(mrawret.loc[x, 'trade_date']) for x in range(mrawret.shape[0])]
     mrawret['mrawret'] = mDate_ret
     mrawret['mrawret'] = pd.to_datetime(mrawret['mrawret'])
@@ -208,7 +223,7 @@ def main():
     ax.set_ylabel('Cumulative Return')
     ax.set_title('The Cumulative Return for the Factor Model and the HS300 Strategy')
     plt.show()
-    fig.savefig("./Factor_Model_V2_Payoff_plot_Wenzhou.pdf", dpi=100)
+    fig.savefig(image_save_path, dpi=100)
 
 
 if __name__ == '__main__':

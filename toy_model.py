@@ -2,6 +2,7 @@ import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from configuration import Config
 from statsmodels.distributions.empirical_distribution import ECDF
 
 
@@ -122,26 +123,25 @@ def compute_factor_v0(data_df,date_factor,industry_factor):
     raw_factor.to_csv('raw_factor_test.csv', mode='w', header=True)
 
 
-def data_process():
-    hs300_all_data_path = r'./data/tmp/hs300_all_trading_data_monthly.csv'
-    hs300_traing_mothly_path = r'./data/tmp/monthly_data.csv'
-    hs300_all_data = pd.read_csv(hs300_all_data_path, sep=',')
-    hs300_traing_mothly = pd.read_csv(hs300_traing_mothly_path, sep=r',')
-    hs300_momentum = hs300_traing_mothly[['trade_date', 'ts_code', 'last_1mon_pricechange', '12monPC_1monPC']]
-    hs300_all_data = hs300_all_data.merge(hs300_momentum, how='left',
-                                          left_on=["trade_date", 'ts_code'],
-                                          right_on=["trade_date", 'ts_code'])
-    date_factor = hs300_all_data['trade_date'].drop_duplicates()
-    industry_factor = hs300_all_data['gics_code'].drop_duplicates()
-    return hs300_all_data, date_factor, industry_factor
+def data_process(config):
+    all_data_path = config.all_data_path
+    opt_trading_monthly_path = config.opt_monthly_data_path
+    all_data = pd.read_csv(all_data_path, sep=',')
+    opt_trading_monthly = pd.read_csv(opt_trading_monthly_path, sep=r',')
+    hs300_momentum = opt_trading_monthly[['trade_date', 'ts_code', 'last_1mon_pricechange', '12monPC_1monPC']]
+    all_data = all_data.merge(hs300_momentum, how='left', on=["trade_date", 'ts_code'])
+    date_list = all_data['trade_date'].drop_duplicates()
+    industry_list = all_data['gics_code'].drop_duplicates()
+    return all_data, date_list, industry_list
 
 
-def compute_factor(data_df, date_factor, industry_factor):
+def compute_factor(data_df, date_list, industry_list, config):
     raw_factor = pd.DataFrame()
     cnt = 0
-    for i in industry_factor:
+    raw_factor_path = config.raw_factor_path
+    for i in industry_list:
         print('current industry is : ', i)
-        for j in tqdm(date_factor):
+        for j in tqdm(date_list):
             raw_file1 = data_df[data_df.trade_date == j]
             raw_file1 = raw_file1[raw_file1.gics_code == i]
             # print(raw_file1.columns)
@@ -193,15 +193,17 @@ def compute_factor(data_df, date_factor, industry_factor):
                 else:
                     raw_factor = pd.concat([raw_factor, raw_file1], axis=0)
     print("wrong count of data is ", cnt)
-    raw_factor.to_csv('./data/tmp/raw_factor_test_v2.csv', mode='w', header=True)
+    raw_factor.to_csv(raw_factor_path, mode='w', header=True)
 
 
 def main():
     start = time.time()
-    data_df, date_factor, industry_factor = data_process()
-    date_factor = date_factor.sort_values()
-    industry_factor = industry_factor.sort_values()
-    compute_factor(data_df,date_factor, industry_factor)
+    config_data_path = r'./config/config.json'
+    config = Config(config_data_path)
+    data_df, date_list, industry_list = data_process(config)
+    date_factor = date_list.sort_values()
+    industry_factor = industry_list.sort_values()
+    compute_factor(data_df, date_factor, industry_factor, config)
     print('cost time:', time.time()-start)
 
 

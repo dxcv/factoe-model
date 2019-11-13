@@ -1,7 +1,9 @@
 import gurobipy
 import pandas as pd
+from collections import Counter
 import numpy as np
 from tools import dict_prod
+from data_process import load_obj
 
 
 class BackTest(object):
@@ -33,7 +35,7 @@ class BackTest(object):
         return factor_score
 
     @staticmethod
-    def select_suspend_stock(all_stock, hs300_stock):
+    def get_suspend_stock(all_stock, hs300_stock):
         all_stock = set(all_stock)
         hs300_stock = set(hs300_stock)
         suspend_stock = hs300_stock.difference(all_stock)
@@ -59,6 +61,10 @@ class BackTest(object):
         assert abs(1 - sum(original_weight.values())) <= 0.01, print(sum(original_weight.values()))
         return original_weight
 
+    @staticmethod
+    def check_code_list(opt_code_list, trade_code_list):
+        assert set(opt_code_list) == set(trade_code_list), print(set(opt_code_list).difference(set(trade_code_list)))
+
 
 class BackTestHs300(BackTest):
 
@@ -66,21 +72,24 @@ class BackTestHs300(BackTest):
         super(BackTestHs300).__init__()
         self.name = 'hs300'
         self.constr_factor = config.constr_factor
+        self.stock_number = config.stock_number
         self.stock_lower_bound = config.stock_lower_bound
         self.stock_upper_bound = config.stock_upper_bound
         self.factor_upper_bound = config.factor_upper_bound
         self.factor_lower_bound = config.factor_lower_bound
         self.industry_lower_bound = config.industry_lower_bound
         self.industry_upper_bound = config.industry_upper_bound
+        self.name2code = load_obj(config.name2code)
+        self.code2name = dict((v,k) for k,v in self.name2code.items())
+        self.gics2name = load_obj(config.gics2name)
 
-    def init_model(self, hs300_ts_code, original_weight,
+    def init_model(self, wgt_code_list, original_weight,
                    overall_score, adjust_weight, suspend_stock):
         stock_lower_bound = self.stock_lower_bound
         stock_upper_bound = self.stock_upper_bound
         model = gurobipy.Model(self.name)
-        weight = {}
-        weight_binary = {}
-        for code in hs300_ts_code:
+        weight, weight_binary = {}, {}
+        for code in wgt_code_list:
             lb = max(0, original_weight[code] - stock_lower_bound)
             ub = min(1, original_weight[code] + stock_upper_bound)
             if adjust_weight and (code in adjust_weight) and (code in suspend_stock):
@@ -97,40 +106,42 @@ class BackTestHs300(BackTest):
     def add_trade_constr(self, model, weight, weight_binary,
                          suspend_stock, adjust_weight):
         if not adjust_weight:
-            adjust_weight = {}
-            for stock in suspend_stock:
-                adjust_weight[stock] = 0
+            return
         for stock in suspend_stock:
             if stock in adjust_weight and adjust_weight[stock] != 0:
                 model.addConstr(weight[stock] == adjust_weight[stock], name='trade_cons_' + stock)
 
-    def add_stock_constr(self, model, weight, weight_binary, hs300_ts_code):
-        # 选股数量约束，要求 [0，60]
-        model.addConstrs(weight[j] <= weight_binary[j] for j in hs300_ts_code)
-        model.addConstr(gurobipy.quicksum(weight_binary) <= 100, name='stock num')
-        # 权重和约束，weight和为 1
+    def add_stock_number_constr(self, model, weight, weight_binary, code_list):
+        stock_number = self.stock_number
+        model.addConstrs(weight[j] <= weight_binary[j] for j in code_list)
+        model.addConstr(gurobipy.quicksum(weight_binary) <= stock_number, name='stock num')
         model.addConstr(gurobipy.quicksum(weight) == 1, 'budge')
 
-    def add_industry_constr(self, model, weight, factor_data, suspend_stock_code, adjust_weight):
+    def add_industry_constr(self, model, weight, daily_data, suspend_stock_code, adjust_weight):
         industry_lower_bound = self.industry_lower_bound
         industry_upper_bound = self.industry_upper_bound
-        all_industry = factor_data['gics_code'].drop_duplicates()
-        all_industry = all_industry.to_list()
+        all_industry = daily_data['gics_code'].drop_duplicates().to_list()
         all_industry.sort()
         for industry in all_industry:
-            specific_industry_df = factor_data[factor_data.gics_code == 20.0]
+            specific_industry_df = daily_data[daily_data.gics_code == industry]
+            codes = specific_industry_df.ts_code.to_list()
+            suspend_stock_in_specific_industry = set(codes).union(suspend_stock_code)
+            if adjust_weight:
+                suspend_stock_weight_sum = sum([adjust_weight[j] for j in suspend_stock_in_specific_industry if j in adjust_weight])
+            else:
+                suspend_stock_weight_sum = 0
             if len(specific_industry_df) <= 5:
                 continue
-            codes = specific_industry_df.ts_code.to_list()
-            codes.sort()
-            assert len(codes) == len(set(codes)), print('codes num and set codes num',
-                                                        len(codes), len(set(codes)), industry)
-            codes = set(codes)
+            assert len(codes) == len(set(codes)), \
+                print('codes num and set codes num', len(codes), len(set(codes)), industry)
             lb = sum(specific_industry_df.weight) / 100 - industry_lower_bound
             ub = sum(specific_industry_df.weight) / 100 + industry_upper_bound
+            ub_adjust = suspend_stock_weight_sum + industry_upper_bound
+            if ub <= suspend_stock_weight_sum:
+                ub = ub_adjust
             opt_industry_weight = sum([weight[j] for j in codes])
-            model.addConstr(opt_industry_weight <= ub, name='industry_upper_bound: ' + str(industry))
-            model.addConstr(opt_industry_weight >= lb, name='industry_lowwer_bound: ' + str(industry))
+            model.addConstr(opt_industry_weight <= ub, name='industry_upper_bound: ' + str(self.gics2name[industry]))
+            model.addConstr(opt_industry_weight >= lb, name='industry_lowwer_bound: ' + str(self.gics2name[industry]))
 
     def add_factor_constr(self, model, weight, factor_data, original_weight, factor_name):
         factor_upper_bound = self.factor_upper_bound
@@ -142,24 +153,28 @@ class BackTestHs300(BackTest):
         model.addConstr(weight.prod(factor_score) >= lower_bound)
         model.addConstr(weight.prod(factor_score) <= upper_bound)
 
-    def optimize(self, factor_data, specific_day_trade_data,
-                 specific_day_hs300_wgt, adjust_weight, date):
-        overall_score = self.get_factor_score(factor_data, 'overall_factor')
-        trade_ts_codes = specific_day_trade_data['ts_code']
-        hs300_ts_codes = specific_day_hs300_wgt['ts_code']
-        suspend_stock_code = self.select_suspend_stock(trade_ts_codes, hs300_ts_codes)
-        original_weight = self.get_ts_code_original_weight(specific_day_hs300_wgt)
-        model, weight, weight_binary = self.init_model(hs300_ts_codes, original_weight,
-                                                  overall_score, adjust_weight,
-                                                  suspend_stock_code)
-        self.add_stock_constr(model, weight, weight_binary, hs300_ts_codes)
+    def optimize(self, specific_day_factor_data, specific_day_daily_data,
+                 specific_day_wgt_data, adjust_weight, trade_date):
+        trade_day_data = specific_day_daily_data
+        opt_day_data = specific_day_factor_data
+        overall_score = self.get_factor_score(opt_day_data, 'overall_factor')
+
+        trade_code_list = trade_day_data['ts_code'].to_list()
+        wgt_code_list = specific_day_wgt_data['ts_code'].to_list()
+        opt_code_list = opt_day_data['ts_code'].to_list()
+        suspend_stock_code = self.get_suspend_stock(trade_code_list, wgt_code_list)
+        original_weight = self.get_ts_code_original_weight(specific_day_wgt_data)
+        model, weight, weight_binary = self.init_model(wgt_code_list, original_weight,
+                                                       overall_score, adjust_weight,
+                                                       suspend_stock_code)
+        self.add_stock_number_constr(model, weight, weight_binary, wgt_code_list)
         self.add_trade_constr(model, weight, weight_binary, suspend_stock_code, adjust_weight)
-        self.add_industry_constr(model, weight, factor_data, suspend_stock_code, adjust_weight)
+        self.add_industry_constr(model, weight, specific_day_wgt_data, suspend_stock_code, adjust_weight)
         for fac in self.constr_factor:
-            self.add_factor_constr(model, weight, factor_data, original_weight, fac)
+            self.add_factor_constr(model, weight, opt_day_data, original_weight, fac)
         model.optimize()
-        vars_opt = pd.DataFrame(index=hs300_ts_codes.to_list())
-        vars_opt['trade_date'] = date
+        vars_opt = pd.DataFrame(index=wgt_code_list)
+        vars_opt['trade_date'] = trade_date
         opt_weight = {}
         if model.status == gurobipy.GRB.Status.OPTIMAL:
             for v in model.getVars():
@@ -172,9 +187,9 @@ class BackTestHs300(BackTest):
                 vars_opt.loc[ts_code, colunm_name] = v.x
                 vars_opt.loc[ts_code, 'ts_code'] = ts_code
         else:
-            print('data {} infeasible'.format(date))
+            print('trade date {} infeasible'.format(trade_date))
             model.computeIIS()
-            model.write("./ilp/model_{}.ilp".format(date))
+            model.write("./ilp/model_{}.ilp".format(trade_date))
             exit()
         return opt_weight, original_weight, vars_opt
 
