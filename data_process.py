@@ -2,17 +2,16 @@ import os
 import copy
 import pandas as pd
 import numpy as np
+from tools import load_obj, save_obj, myround
 from datetime import datetime
 from time import time
 from tqdm import tqdm
-import pickle as pkl
 import bisect
-import math
-from pprint import pprint
-from configuration import Config
+from model.configuration import Config
 
 config_data_path = r'./config/config.json'
-config = Config(config_data_path)
+basic_config_path = r'./config/basic_config.json'
+config = Config(config_data_path, basic_config_path)
 tmp_path = config.tmp_path
 rename_dict = config.rename_dict
 
@@ -27,17 +26,6 @@ def read_csv(sr, sep=',', encoding='utf8'):
     df = pd.read_csv(sr, sep=sep, encoding=encoding)
     df = norm_df(df)
     return df
-
-
-def save_obj(file, obj):
-    with open(file, 'wb') as f:
-        pkl.dump(obj, f)
-
-
-def load_obj(file):
-    with open(file, 'rb') as f:
-        obj = pkl.load(f)
-    return obj
 
 
 def merge_data(df1, df2):
@@ -145,6 +133,7 @@ def prepare_fix_wgt_data_df(hs300_wgt_data):
     code_set = set([])
     hs300_col_name = hs300_wgt_data.columns.to_list()
     hs300_wgt_df = pd.DataFrame(columns=hs300_col_name)
+    print("prepare fixed weight data process : ", "\n")
     for date in tqdm(date_list):
         day_wgt_data = hs300_wgt_data[hs300_wgt_data.trade_date == date]
         day_code_list = day_wgt_data['ts_code'].to_list()
@@ -181,12 +170,13 @@ def prepare_fixed_daily_data(daily_data):
     trade_date = daily_data['trade_date'].drop_duplicates().to_list()
     trade_date.sort()
     df = pd.DataFrame()
+    print("prepare fixed daily data process : ", "\n")
     for code in tqdm(ts_code):
         col_dict = {'ts_code': code, 'trade_date': trade_date}
         tmp_df = pd.DataFrame(col_dict)
-        tmp_df = tmp_df.merge(daily_data, how='left', on=['ts_code', 'trade_date'])
-        tmp_df = tmp_df.fillna(method='ffill')
         df = df.append(tmp_df, ignore_index=True)
+    df = df.merge(daily_data, how='left', on=['ts_code', 'trade_date'])
+    df = df.fillna(method='ffill')
     df.to_csv(file_path, index=False)
     return df
 
@@ -202,6 +192,7 @@ def prepare_fixed_monthly_data_df(opt_date_list, trade_date_list, code_list):
     gics2name = get_gics2name()
     opt_df = pd.DataFrame()
     trade_df = pd.DataFrame()
+    print("prepare fixed monthly data process : ", "\n")
     for code in tqdm(code_list):
         gics = code2gics[code]
         industry_name = gics2name[gics]
@@ -230,6 +221,7 @@ def prepare_monthly_price_change_data(monthly_data, month_const, lag_num, sava_p
     monthly_data = monthly_data.sort_values(['ts_code', 'trade_date'])
     code_list = monthly_data['ts_code'].drop_duplicates().to_list()
     df = pd.DataFrame()
+    print("prepare monthly price change data process : ", "\n")
     for code in tqdm(code_list):
         code_hs300_trading_monthly = monthly_data[monthly_data.ts_code == code]
         date_list = code_hs300_trading_monthly['trade_date'].to_list()
@@ -294,6 +286,7 @@ def prepare_full_financial_sheet(hs300_balance_sheet, hs300_income_sheet,
         trade_date = list(set(trade_date))
         trade_date.sort()
         df = pd.DataFrame()
+        print("prepare financial data process : ", "\n")
         for code in tqdm(ts_code):
             col_dict = {
                 'ts_code': code,
@@ -326,6 +319,7 @@ def prepare_indicator_sheet(hs300_income_sheet, hs300_trading_data, blank_df_pat
         trade_date = list(set(trade_date))
         trade_date.sort()
         df = pd.DataFrame()
+        print("prepare indicator data process : ", "\n")
         for code in tqdm(ts_code):
             col_dict = {
                 'ts_code': code,
@@ -346,6 +340,7 @@ def prepare_vol_data_df(hs300_trading_data, vol_lag):
     hs300_trading_data = hs300_trading_data[['trade_date', 'ts_code', 'pct_chg_hfq']]
     code_list = hs300_trading_data['ts_code'].drop_duplicates().to_list()
     vol_data = pd.DataFrame()
+    print('prepare vol data process :', "\n")
     for code in tqdm(code_list):
         code_trading_data = hs300_trading_data[hs300_trading_data.ts_code == code]
         code_trading_data = code_trading_data.sort_values(['trade_date'])
@@ -375,6 +370,7 @@ def prepare_rsi_data_df(hs300_trading_data, rsi_lag):
     hs300_trading_data = hs300_trading_data[['trade_date', 'ts_code', 'pct_chg_hfq']]
     code_list = hs300_trading_data['ts_code'].drop_duplicates().to_list()
     rsi_data = pd.DataFrame()
+    print('prepare vol data process :', "\n")
     for code in tqdm(code_list):
         code_trading_data = hs300_trading_data[hs300_trading_data.ts_code == code]
         code_trading_data = code_trading_data.sort_values(['trade_date'])
@@ -470,29 +466,6 @@ def prepare_week_fix_wgt_data_df(hs300_wgt_data, opt_date_list, daily_data):
         opt_df = opt_df.append(nan_df, ignore_index=True)
     opt_df.to_csv(fixed_opt_weight_data_path, index=False)
     return opt_df
-
-
-def myround(x):
-    conds = [x <= 0.15,
-             (x > 0.15) & (x <= 0.2),
-             (x > 0.2) & (x <= 0.3),
-             (x > 0.3) & (x <= 0.4),
-             (x > 0.4) & (x <= 0.5),
-             (x > 0.5) & (x <= 0.6),
-             (x > 0.6) & (x <= 0.7),
-             (x > 0.7) & (x <= 0.8),
-             x > 0.8]
-    funcs = [lambda y: np.ceil(y * 100)/100,
-             lambda y: 0.2,
-             lambda y: 0.3,
-             lambda y: 0.4,
-             lambda y: 0.5,
-             lambda y: 0.6,
-             lambda y: 0.7,
-             lambda y: 0.8,
-             lambda y: 1.0]
-    x = np.piecewise(x,conds,funcs)
-    return x
 
 
 def compute_weight_by_cirv_market_value(daily_data, weight_code):

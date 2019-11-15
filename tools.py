@@ -1,56 +1,82 @@
 import pandas as pd
 from tqdm import tqdm
 import pickle as pkl
+import numpy as np
 import os
 
-# hs300_trading_monthly_path = r'./data/HS300tradingmonthly.txt'
-# raw_factor_path = r'./data/raw_factor_test.csv'
-# hs300_trade_data_path = r'./data/399300.SZ_tradingdata_part1.csv'
-# hs300_wgt_path = r'./data/HS300_idx_wt.csv'
-# hs300_idx_codes_path = r'./data/399300.SZ_weight.txt'
-# hs300_all_data_path = r'./data/HS300alldata_vol2.txt'
-# tmp_path = r'./data/tmp'
-#
-# industry_upper_bound = 0.01
-# industry_lower_bound = 0.01
-#
-# factor_upper_bound = 0.35
-# factor_lower_bound = 0.00
-#
-# stock_upper_bound = 0.01
-# stock_lower_bound = 0.01
-#
-# constr_factor = ['Size_Factor', 'IdioVolatility_Factor', 'RSI_Factor', 'Quality_Factor', 'Value_Factor']
+
+def myround(x):
+    conds = [x <= 0.15,
+             (x > 0.15) & (x <= 0.2),
+             (x > 0.2) & (x <= 0.3),
+             (x > 0.3) & (x <= 0.4),
+             (x > 0.4) & (x <= 0.5),
+             (x > 0.5) & (x <= 0.6),
+             (x > 0.6) & (x <= 0.7),
+             (x > 0.7) & (x <= 0.8),
+             x > 0.8]
+    funcs = [lambda y: np.ceil(y * 100)/100,
+             lambda y: 0.2,
+             lambda y: 0.3,
+             lambda y: 0.4,
+             lambda y: 0.5,
+             lambda y: 0.6,
+             lambda y: 0.7,
+             lambda y: 0.8,
+             lambda y: 1.0]
+    x = np.piecewise(x,conds,funcs)
+    return x
+
+def win(x, trim=0.2, rm=True):
+    y = x.copy()
+    x.dropna()
+    if (trim < 0) | (trim > 0.5):
+        print("trimming must be reasonable")
+        exit()
+    qtrim_min = x.quantile(trim)
+    qtrim_mid = x.quantile(0.5)
+    qtrim_max = x.quantile(1-trim)
+    if trim < 0.5:
+        y[x < qtrim_min] = qtrim_min
+        y[x > qtrim_max] = qtrim_max
+    else:
+        y[x != None] = qtrim_mid
+    return y
 
 
-def create_stock_dict(stock_codes):
-    stock_codes.sort()
-    stock2id = {}
-    with open('./data/hs300_stock2id.txt', 'w') as f:
-        for idx, code in enumerate(stock_codes):
-            stock2id[code] = idx
-            f.write('\t'.join([code, str(idx)]) + '\n')
-    id2stock = dict([(val, key) for key, val in stock2id.items()])
-    with open('./data/hs300_stock2id.pkl','wb') as f1, open('./data/hs300_id2stock.pkl','wb') as f2:
-        pkl.dump(stock2id, f1)
-        pkl.dump(id2stock, f2)
+def stand(z, trim_num):
+    x = win(z, trim_num)
+    x_mean = np.nanmean(x)
+    x_std = np.nanstd(x)
+    y = (x - x_mean) / x_std
+    return y
 
+
+def std_winsor(z):
+    tmp_z = z.copy()
+    tmp_z.dropna()
+    z_std = np.std(tmp_z)
+    min_std = -3 * z_std
+    max_std = 3 * z_std
+    z[z<min_std] = min_std
+    z[z>max_std] = max_std
+    z[z==None] = min_std
+    return z
+
+
+def save_obj(file, obj):
+    with open(file, 'wb') as f:
+        pkl.dump(obj, f)
+
+
+def load_obj(file):
+    with open(file, 'rb') as f:
+        obj = pkl.load(f)
+    return obj
 
 def dict_prod(source, target):
     assert source.keys() == target.keys(), print(set(source.keys()).difference(set(target.keys())))
     return sum(source.get(key, 0) * target.get(key, 0) for key in source.keys() | target.keys())
-
-
-def prepare_data( ):
-    split_columns = ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg']
-    trade_data_df = pd.read_csv(hs300_trade_data_path, sep='\t')
-    wgt_data_df = pd.read_csv(hs300_wgt_path, sep=',')
-    trade_data_df = trade_data_df[split_columns]
-    all_data_df = wgt_data_df.merge(trade_data_df, how='left',
-                                    left_on=['sec_code', 'Date'], right_on=['ts_code', 'trade_date'])
-    all_data_df.drop(['ts_code', 'trade_date'], axis=1)
-    all_data_df.to_csv('tmp.csv', sep=',')
-    print(all_data_df.head)
 
 
 def select_suspend_stock(all_stock, hs300_stock):
@@ -95,52 +121,6 @@ def get_hs300_name2code(hs300_wgt_data):
             pkl.dump(name2code, f)
     return name2code
 
-
-def get_hs300_datelist(hs300_wgt_data):
-    return hs300_wgt_data['trade_date'].drop_duplicates().to_list()
-
-
-def prepare_hs300_wgt_df():
-    destination = tmp_path
-    if not os.path.exists(destination):
-        os.makedirs(destination)
-    hs300_wgt_data = pd.read_csv(hs300_wgt_path, sep=',')
-    rename_dict = {
-        'sec_code': "ts_code",
-        'sec_name': 'stock_name',
-        'Date': 'trade_date'}
-    hs300_wgt_data = hs300_wgt_data.drop(columns='Adjust date')
-    hs300_wgt_data = hs300_wgt_data.rename(columns=rename_dict)
-    name2code = get_hs300_name2code(hs300_wgt_data)
-    code2name = dict([(val, key) for key, val in name2code.items()])
-    date_list = get_hs300_datelist(hs300_wgt_data)
-    date_list.sort()
-    code_set = set([])
-    hs300_col_name = hs300_wgt_data.columns.to_list()
-    nan_data = pd.Series(index=hs300_col_name)
-    hs300_wgt_df = pd.DataFrame(columns=hs300_col_name)
-    for date in date_list:
-        day_wgt_data = hs300_wgt_data[hs300_wgt_data.trade_date == date]
-        day_code_list = day_wgt_data['ts_code'].to_list()
-        day_code_list = set(day_code_list)
-        code_set.update(set(day_code_list))
-        day_diff_code_list = code_set.difference(day_code_list)
-        # print('day {} add '.format(date), len(day_diff_code_list))
-        hs300_wgt_df = hs300_wgt_df.append(day_wgt_data, ignore_index=True)
-        if day_diff_code_list:
-            nan_col_code = list(day_diff_code_list)
-            nan_col_name = [code2name[i] for i in day_diff_code_list]
-            nan_dict = {
-                'ts_code': nan_col_code,
-                'stock_name': nan_col_name,
-                'weight': 0,
-                'trade_date': date
-            }
-            nan_df = pd.DataFrame(nan_dict)
-            hs300_wgt_df = hs300_wgt_df.append(nan_df, ignore_index=True)
-            # print('add {} {} on the date {}'.format(code, code2name[code], date))
-    hs300_wgt_df.to_csv(os.path.join(destination, 'hs300_wgt_df.csv'), sep=',')
-    return hs300_wgt_df
 
 
 if __name__ == '__main__':

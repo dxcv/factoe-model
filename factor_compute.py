@@ -1,0 +1,178 @@
+import time
+import pandas as pd
+from tqdm import tqdm
+from configuration import Config
+from statsmodels.distributions.empirical_distribution import ECDF
+from tools import win, stand, std_winsor, load_obj, save_obj
+
+
+def compute(x, nagtive=False):
+    if len(x) == 0:
+        return x
+    sd_szie = stand(x, 0.05)
+    if nagtive:
+        sd_szie = - sd_szie
+    sd_sd_size = std_winsor(sd_szie)
+    try:
+        size_cdf = ECDF(sd_sd_size)
+    except:
+        print(x)
+        exit()
+    size_cdf_ = size_cdf(sd_sd_size)
+    return size_cdf_
+
+
+def data_process_v0():
+    data_path = r'./data/Data_industry.csv'
+    data_df = pd.read_csv(data_path)
+    data_df = data_df[data_df.Date>=20100226]
+    data_df = data_df.drop_duplicates()
+    factor_date = data_df['Date'].drop_duplicates()
+    factor_all_industry = data_df['FirstIndustryCode'].drop_duplicates()
+    return data_df, factor_date, factor_all_industry
+
+
+def compute_factor_v0(data_df, date_factor, industry_factor):
+    raw_factor = None
+    cnt = 0
+    for i in industry_factor:
+        print('\n', 'current industry is : ', i, '\n')
+        for j in tqdm(date_factor):
+            raw_file1 = data_df[data_df.Date == j]
+            raw_file1 = raw_file1[raw_file1.FirstIndustryCode == i]
+            # print(raw_file1.columns)
+            if raw_file1.empty:
+                cnt += 1
+                continue
+            else:
+                # size
+                raw_file1["size_factor"] = compute(raw_file1['Log_mkt_Cap'], nagtive=True)
+                # Volatility（波动率）
+                raw_file1["vol_factor"] = compute(raw_file1['Volatility60'], nagtive=True)
+                # Momentum
+                raw_file1["mo_factor"] = compute(raw_file1['12Mo_1Mo'])
+                # Quality
+                sd_roa = stand(raw_file1['Rev_Over_mktCap'], 0.05)  # 资产回报
+                roa_cdf = ECDF(sd_roa)
+                sd_acc = stand(raw_file1["Accural"], 0.05)  # accural ？现金流
+                acc_cdf = ECDF(sd_acc)
+                cash_debt = raw_file1["NetOperateCashFlow"] / raw_file1["TotalLiability"]  # 总负债
+                sd_cash = stand(cash_debt, 0.05)
+                cash_cdf = ECDF(sd_cash)
+                raw_file1["qa_factor"] = 0.25 * roa_cdf(sd_roa) + 0.25 * acc_cdf(sd_acc) + 0.5 * cash_cdf(sd_cash)
+                # Value
+                sd_cashval = stand(raw_file1['Cash_Over_MktCap'], 0.05)  # 现金除以市值
+                sd_sd_cashval = std_winsor(sd_cashval)
+                cashval_cdf = ECDF(sd_sd_cashval)
+                sd_roa = stand(raw_file1['Rev_Over_mktCap'], 0.05)  # 收益除以市值
+                sd_sd_roa = std_winsor(sd_roa)
+                roa_cdf = ECDF(sd_sd_roa)
+                sd_bp = stand(raw_file1['BP2'], 0.05)  # 市净率
+                sd_sd_bp = std_winsor(sd_bp)
+                bp_cdf = ECDF(sd_sd_bp)
+                raw_file1["value_factor"] = 1 / 3 * cashval_cdf(sd_sd_cashval) \
+                                            + 1 / 3 * roa_cdf(sd_sd_roa) \
+                                            + 1 / 3 * bp_cdf(sd_sd_bp)
+                raw_file1["overall_factor"] = raw_file1["value_factor"] \
+                                              + raw_file1["qa_factor"] \
+                                              + raw_file1["mo_factor"] \
+                                              + raw_file1["vol_factor"] \
+                                              + raw_file1["size_factor"] * 0.15
+                if not raw_factor:
+                    raw_factor = raw_file1
+                else:
+                    raw_factor = pd.concat([raw_factor, raw_file1], axis=0)
+    print("wrong count of data is ", cnt)
+    raw_factor.to_csv('raw_factor_test.csv', mode='w', header=True)
+
+
+def data_process(config):
+    all_data_path = config.all_data_path
+    opt_trading_monthly_path = config.opt_monthly_data_path
+    all_data = pd.read_csv(all_data_path, sep=',')
+    opt_trading_monthly = pd.read_csv(opt_trading_monthly_path, sep=r',')
+    hs300_momentum = opt_trading_monthly[['trade_date', 'ts_code', 'last_1mon_pricechange', '12monPC_1monPC']]
+    all_data = all_data.merge(hs300_momentum, how='left', on=["trade_date", 'ts_code'])
+    date_list = all_data['trade_date'].drop_duplicates()
+    industry_list = all_data['gics_code'].drop_duplicates()
+    return all_data, date_list, industry_list
+
+
+def compute_factor(data_df, date_list, industry_list, config):
+    size_factor_weight = config.size_factor_weight
+    value_factor_weight = config.value_factor_weight
+    quality_factor_weight = config.quality_factor_weight
+    momenta_factor_weight = config.momenta_factor_weight
+    rsi_factor_weight = config.rsi_factor_weight
+    volatility_factor_weight = config.volatility_factor_weight
+    gics2name = load_obj(config.gics2name)
+    raw_factor = pd.DataFrame()
+    raw_factor_path = config.raw_factor_path
+    for i in industry_list:
+        print('current industry is : ', gics2name[i], '\n')
+        for j in tqdm(date_list):
+            raw_file1 = data_df[data_df.trade_date == j]
+            raw_file1 = raw_file1[raw_file1.gics_code == i]
+            if raw_file1.empty:
+                continue
+            else:
+                # size
+                raw_file1["size_factor"] = compute(raw_file1['Log_mkt_Cap'], nagtive=True)
+                # Volatility（交易量-为了验证波动率）
+                raw_file1["volatility_factor"] = compute(raw_file1['Volatility'], nagtive=True)
+                # Idiosyncratic volatility
+                # raw_file1['idioVolatility_Factor'] = compute(raw_file1['idio_vol'], nagtive=True)
+                # RSI 过去n：14天内多少天下降，多少天上升
+                raw_file1['RSI_factor'] = compute(raw_file1['RSI'], nagtive=True)
+                # Momentum
+                raw_file1["momentum_factor"] = compute(raw_file1['last_1mon_pricechange'], nagtive=True)
+                # Quality
+                sd_roa = stand(raw_file1['Rev_Over_mktCap'], 0.05)  # 资产回报
+                roa_cdf = ECDF(sd_roa)
+                sd_acc = stand(raw_file1["q_opincome"], 0.05)  # accural ？现金流
+                acc_cdf = ECDF(sd_acc)
+                sd_nocfod = stand(raw_file1['NOCF_Over_Debt'], 0.05)
+                nocfod_cdf = ECDF(sd_nocfod)
+                raw_file1["quality_factor"] = 0.25 * roa_cdf(sd_roa) + 0.25 * acc_cdf(sd_acc) + 0.5 * nocfod_cdf(sd_nocfod)
+                # Value
+                sd_cashval = stand(raw_file1['Cash_Over_MktCap'], 0.05)  # 现金除以市值
+                sd_sd_cashval = std_winsor(sd_cashval)
+                cashval_cdf = ECDF(sd_sd_cashval)
+                sd_roa = stand(raw_file1['Rev_Over_mktCap'], 0.05)  # 收益除以市值
+                sd_sd_roa = std_winsor(sd_roa)
+                roa_cdf = ECDF(sd_sd_roa)
+                sd_bp = stand(raw_file1['pb'], 0.05)  # 市净率
+                sd_sd_bp = std_winsor(sd_bp)
+                bp_cdf = ECDF(sd_sd_bp)
+
+                raw_file1["value_factor"] = 1 / 3 * cashval_cdf(sd_sd_cashval) \
+                                            + 1 / 3 * roa_cdf(sd_sd_roa) \
+                                            + 1 / 3 * bp_cdf(sd_sd_bp)
+
+                raw_file1["overall_factor"] = raw_file1["size_factor"] * size_factor_weight \
+                                              + raw_file1["volatility_factor"] * volatility_factor_weight \
+                                              + raw_file1["RSI_factor"] * rsi_factor_weight \
+                                              + raw_file1["momentum_factor"] * momenta_factor_weight \
+                                              + raw_file1["quality_factor"] * quality_factor_weight \
+                                              + raw_file1["value_factor"] * value_factor_weight
+                if raw_factor.empty:
+                    raw_factor = raw_file1
+                else:
+                    raw_factor = pd.concat([raw_factor, raw_file1], axis=0)
+    raw_factor.to_csv(raw_factor_path, mode='w', header=True)
+
+
+def main():
+    start = time.time()
+    config_data_path = r'./config/config.json'
+    basic_config_path = r'./config/basic_config.json'
+    config = Config(config_data_path, basic_config_path)
+    data_df, date_list, industry_list = data_process(config)
+    date_factor = date_list.sort_values()
+    industry_factor = industry_list.sort_values()
+    compute_factor(data_df, date_factor, industry_factor, config)
+    print('cost time:', time.time()-start)
+
+
+if __name__ == '__main__':
+    main()
